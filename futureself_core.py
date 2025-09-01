@@ -71,7 +71,7 @@ def add_memory_text(text, meta=None):
 def retrieve_similar(text, top_k=6, min_score=0.25, rerank_top_k=5):
     model = get_embed_model()
     q_emb = model.encode(text, convert_to_tensor=True)
-    corpus_embs = [entry["embedding"] for entry in memory.get("embeddings", [])]
+    corpus_tensor = np.array(corpus_embs, dtype=np.float32)
     if not corpus_embs:
         return []
     corpus_tensor = np.array(corpus_embs)
