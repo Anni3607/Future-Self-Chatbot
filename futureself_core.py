@@ -1,12 +1,12 @@
-
 # futureself_core.py
 # Modular core for FutureSelf project
 import json, uuid, datetime
 from pathlib import Path
-from sentence_transformers import SentenceTransformer, util
+from sentence_transformers import SentenceTransformer, util, CrossEncoder
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 import numpy as np
 import os
+import torch
 
 DATA_DIR = Path("futureself_data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -55,8 +55,6 @@ def get_sentiment_pipeline():
 def get_reranker():
     global _reranker
     if _reranker is None:
-        # Cross-Encoder for re-ranking
-        from sentence_transformers import CrossEncoder
         _reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
     return _reranker
 
@@ -71,15 +69,23 @@ def add_memory_text(text, meta=None):
 def retrieve_similar(text, top_k=6, min_score=0.25, rerank_top_k=5):
     model = get_embed_model()
     q_emb = model.encode(text, convert_to_tensor=True)
-    corpus_tensor = np.array(corpus_embs, dtype=np.float32)
+    
+    # Corrected: Define corpus_embs before use and handle an empty case
+    corpus_embs = [entry["embedding"] for entry in memory.get("embeddings", [])]
+
     if not corpus_embs:
         return []
-    corpus_tensor = np.array(corpus_embs)
+
+    # Corrected: Convert list of embeddings to a PyTorch tensor with a consistent dtype
+    # This also fixes the RuntimeError: expected m1 and m2 to have the same dtype
+    corpus_tensor = torch.tensor(corpus_embs, dtype=torch.float32)
+    
     scores = util.cos_sim(q_emb, corpus_tensor)[0].cpu().numpy()
     idxs = scores.argsort()[::-1]
     candidates = []
     for i in idxs[:top_k]:
         candidates.append({"score": float(scores[i]), "entry": memory["embeddings"][i]})
+    
     # rerank if available
     try:
         reranker = get_reranker()
@@ -93,6 +99,7 @@ def retrieve_similar(text, top_k=6, min_score=0.25, rerank_top_k=5):
     except Exception:
         # fallback to original similarity order
         candidates = candidates[:rerank_top_k]
+    
     # filter by min_score on original sim
     candidates = [c for c in candidates if c["score"] >= min_score]
     return candidates
@@ -103,6 +110,7 @@ def detect_sentiment(text):
         s = get_sentiment_pipeline()(text)[0]
         return {"label": s["label"], "score": float(s["score"])}
     except Exception:
+        # fallback to TextBlob
         tb = __import__("textblob").TextBlob(text).sentiment
         return {"label":"NEUTRAL", "score": 0.5, "polarity": tb.polarity}
 
